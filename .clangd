@@ -1,0 +1,10 @@
+CompileFlags:
+  Add: [
+    "-fopenmp=libomp",
+    "-I/usr/lib/llvm-19/include",
+    "-I/usr/lib/gcc/x86_64-linux-gnu/13/include"
+  ]
+
+  Remove: [
+    "-fopenmp"
+  ]
