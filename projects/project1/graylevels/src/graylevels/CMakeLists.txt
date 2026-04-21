@@ -1,0 +1,10 @@
+add_executable(graylevels
+  main.c
+  single.c
+  parallel.c
+  )
+target_link_libraries(graylevels
+  ppp_pnm
+  m
+  ${MPI_C_LIBRARIES}
+  )
