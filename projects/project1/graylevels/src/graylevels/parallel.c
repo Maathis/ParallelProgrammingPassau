@@ -186,17 +186,35 @@ void compute_parallel(const struct TaskInput *TI) {
         imageSize = (rows*columns);
         imageSizePerProcess = imageSize/np; // Case limit : IMAGE_SIZE%np != 0
 
-        recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
+        int countsSend[np];
+        int displacements[np];
 
-        printf("%d > %d image size fully / %d image size per process\n",self, imageSize, imageSizePerProcess);
-        MPI_Scatter(image, 
-            imageSizePerProcess, 
-            MPI_UINT8_T,
-            recimage, 
-            imageSizePerProcess,
-            MPI_UINT8_T, 
+        for(int i = 0; i < np; ++i)
+        {
+            countsSend[i] = imageSizePerProcess;
+            displacements[i] = i*imageSizePerProcess;
+        }
+
+        int remainder = imageSize%np;
+        if(remainder != 0) {
+            countsSend[np-1] += remainder;
+        }
+
+        int receiverSize;
+        MPI_Scatter(countsSend, 
+            1, 
+            MPI_INT,
+            &receiverSize, 
+            1,
+            MPI_INT, 
             0, 
             MPI_COMM_WORLD);
+            
+        printf("%d > size : %d\n", self, receiverSize);
+
+        recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
+        
+        MPI_Scatterv(image, countsSend, displacements, MPI_UINT8_T, recimage,receiverSize, MPI_UINT8_T,0,MPI_COMM_WORLD);
 
         time_distributed = seconds();
     } else {
