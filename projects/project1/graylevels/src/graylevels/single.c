@@ -12,7 +12,11 @@ static int maxcolor;
 /* Pointer to the input image.
  */
 static uint8_t *image;
-
+void debug2(int *hist, int size) {
+    for (int i = 0; i < size; ++i) {
+        printf("[rank : %d | hist : %d] > %d\n",0,i,hist[i]);
+    }
+}
 static void compute_levels(int levels, uint8_t *newlevels) {
     const int len = rows * columns;
 
@@ -27,6 +31,8 @@ static void compute_levels(int levels, uint8_t *newlevels) {
     // compute the histogram
     for (int i = 0; i < len; ++i)
         histogram[image[i]]++;
+
+    debug2(histogram, maxcolor+1);
 
     // histsum[x] is the number of pixels with gray values
     // that are less than or equal to x.
