@@ -1,6 +1,5 @@
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 #include <omp.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -84,18 +83,23 @@ static void convert_grayvalues(uint8_t *recimage, uint8_t *newlevels) {
 // ppp_pnm_read_part returns the pointer returned by partfn.
 uint8_t *partfn(enum pnm_kind kind, int rows, int columns, int *offset, int *length)
 {
+    if (kind != PNM_KIND_PGM)
+        return NULL;
+
     imageSize = rows*columns;
     imageSizePerProcess = imageSize/np;
-    uint8_t *buffer = (uint8_t*) malloc(imageSize*sizeof(uint8_t));
+    uint8_t *buffer = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
 
+    printf("%d / %d\n", imageSizePerProcess*self, imageSizePerProcess);
     *offset = imageSizePerProcess*self;
+    printf("%d > debug 22\n", self);
     *length = imageSizePerProcess;
+    printf("%d > debug 33\n", self);
 
     return buffer;
 }
 
 void compute_parallel(const struct TaskInput *TI) {
-
     uint8_t *image;
 
     double time_start, time_loaded, time_distributed;
@@ -103,7 +107,6 @@ void compute_parallel(const struct TaskInput *TI) {
     double time_saved;
 
     enum pnm_kind kind;
-
 
     MPI_Comm_size(MPI_COMM_WORLD, &np);
     MPI_Comm_rank(MPI_COMM_WORLD, &self);
@@ -132,6 +135,8 @@ void compute_parallel(const struct TaskInput *TI) {
             &maxcolor, 
             partfn
         );
+        
+        image = (uint8_t*) malloc(imageSize*sizeof(uint8_t));
     } else if (self == 0) {
         // load image on processor 0
         image = ppp_pnm_read(TI->filename, &kind, &rows, &columns, &maxcolor);
@@ -194,6 +199,8 @@ void compute_parallel(const struct TaskInput *TI) {
             MPI_COMM_WORLD);
 
         time_distributed = seconds();
+    } else {
+        time_distributed = seconds();
     }
     // newlevels[x] is the new gray value a pixel with original
     // gray value x should get.
@@ -236,5 +243,6 @@ void compute_parallel(const struct TaskInput *TI) {
                time_collected - time_converted, time_saved - time_collected,
                time_saved - time_start);
         free(image);
+        free(recimage);
     }
 }
