@@ -88,10 +88,14 @@ uint8_t *partfn(enum pnm_kind kind, int rows, int columns, int *offset, int *len
 
     imageSize = rows*columns;
     imageSizePerProcess = imageSize/np;
-    uint8_t *buffer = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
-
+    
     *offset = imageSizePerProcess*self;
+    
+    if(self == (np-1) && imageSize%np != 0) {
+        imageSizePerProcess += imageSize%np;
+    }
     *length = imageSizePerProcess;
+    uint8_t *buffer = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
 
     return buffer;
 }
