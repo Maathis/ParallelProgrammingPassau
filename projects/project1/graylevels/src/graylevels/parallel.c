@@ -16,7 +16,8 @@ static int self;  // rank of our MPI process
 static int rows, columns;
 static int maxcolor;
 
-static int imageSize, imageSizePerProcess;
+static int imageSize, imageSizePerProcess; // imageSizePerProcess is the local size for each process
+
 uint8_t *recimage;
 
 void debug(int *hist, int size) {
