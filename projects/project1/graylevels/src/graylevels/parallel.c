@@ -133,7 +133,9 @@ void compute_parallel(const struct TaskInput *TI) {
             partfn
         );
         
-        image = (uint8_t*) malloc(imageSize*sizeof(uint8_t));
+        if(self == 0) {
+            image = (uint8_t*) malloc(imageSize*sizeof(uint8_t));
+        }
     } else if (self == 0) {
         // load image on processor 0
         image = ppp_pnm_read(TI->filename, &kind, &rows, &columns, &maxcolor);
@@ -199,17 +201,24 @@ void compute_parallel(const struct TaskInput *TI) {
         if(self == (np-1) && remainder != 0)
         {
             imageSizePerProcess += remainder;
-            recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
-        } else {
-            recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
         }
+        recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
 
         MPI_Scatterv(image, countsSend, displacements, MPI_UINT8_T, recimage,countsSend[self], MPI_UINT8_T,0,MPI_COMM_WORLD);
+    } else { // Remainder for parallel loading
+        for(int i = 0; i < np; ++i)
+        {
+            countsSend[i] = imageSizePerProcess;
+            displacements[i] = i*imageSizePerProcess;
+        }
 
-        time_distributed = seconds();
-    } else {
-        time_distributed = seconds();
+        int remainder = imageSize%np;
+        if(remainder != 0) {
+            countsSend[np-1] += remainder;
+        }
     }
+    time_distributed = seconds();
+    
     // newlevels[x] is the new gray value a pixel with original
     // gray value x should get.
     uint8_t newlevels[maxcolor + 1];
@@ -223,20 +232,9 @@ void compute_parallel(const struct TaskInput *TI) {
     time_converted = seconds();
 
     // gather image
-    if(parallel_loading) 
-    {
-        MPI_Gather(recimage, 
-            imageSizePerProcess, 
-            MPI_UINT8_T, 
-            image, 
-            imageSizePerProcess, 
-            MPI_UINT8_T, 
-            0, MPI_COMM_WORLD);
-    } else {
-        MPI_Gatherv(
-        recimage,countsSend[self],MPI_UINT8_T,image,countsSend,displacements,MPI_UINT8_T,0,MPI_COMM_WORLD
-        );
-    }
+    MPI_Gatherv(
+        recimage,imageSizePerProcess,MPI_UINT8_T,image,countsSend,displacements,MPI_UINT8_T,0,MPI_COMM_WORLD
+    );
         
     time_collected = seconds();
 
