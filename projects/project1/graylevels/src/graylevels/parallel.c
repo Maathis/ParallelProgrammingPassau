@@ -199,7 +199,7 @@ void compute_parallel(const struct TaskInput *TI) {
         if(self == (np-1) && remainder != 0)
         {
             imageSizePerProcess += remainder;
-            recimage = (uint8_t*) malloc((imageSizePerProcess+remainder)*sizeof(uint8_t));
+            recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
         } else {
             recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
         }
