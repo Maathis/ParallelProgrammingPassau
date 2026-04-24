@@ -90,11 +90,8 @@ uint8_t *partfn(enum pnm_kind kind, int rows, int columns, int *offset, int *len
     imageSizePerProcess = imageSize/np;
     uint8_t *buffer = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
 
-    printf("%d / %d\n", imageSizePerProcess*self, imageSizePerProcess);
     *offset = imageSizePerProcess*self;
-    printf("%d > debug 22\n", self);
     *length = imageSizePerProcess;
-    printf("%d > debug 33\n", self);
 
     return buffer;
 }
@@ -170,6 +167,8 @@ void compute_parallel(const struct TaskInput *TI) {
     time_loaded = seconds();
 
     // distribute image (if needed)
+    int countsSend[np];
+    int displacements[np];
     if(!parallel_loading)
     {
         int config[3] = {columns, rows, maxcolor};
@@ -186,9 +185,6 @@ void compute_parallel(const struct TaskInput *TI) {
         imageSize = (rows*columns);
         imageSizePerProcess = imageSize/np; // Case limit : IMAGE_SIZE%np != 0
 
-        int countsSend[np];
-        int displacements[np];
-
         for(int i = 0; i < np; ++i)
         {
             countsSend[i] = imageSizePerProcess;
@@ -199,22 +195,16 @@ void compute_parallel(const struct TaskInput *TI) {
         if(remainder != 0) {
             countsSend[np-1] += remainder;
         }
-
-        int receiverSize;
-        MPI_Scatter(countsSend, 
-            1, 
-            MPI_INT,
-            &receiverSize, 
-            1,
-            MPI_INT, 
-            0, 
-            MPI_COMM_WORLD);
             
-        printf("%d > size : %d\n", self, receiverSize);
+        if(self == (np-1) && remainder != 0)
+        {
+            imageSizePerProcess += remainder;
+            recimage = (uint8_t*) malloc((imageSizePerProcess+remainder)*sizeof(uint8_t));
+        } else {
+            recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
+        }
 
-        recimage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
-        
-        MPI_Scatterv(image, countsSend, displacements, MPI_UINT8_T, recimage,receiverSize, MPI_UINT8_T,0,MPI_COMM_WORLD);
+        MPI_Scatterv(image, countsSend, displacements, MPI_UINT8_T, recimage,countsSend[self], MPI_UINT8_T,0,MPI_COMM_WORLD);
 
         time_distributed = seconds();
     } else {
@@ -233,13 +223,21 @@ void compute_parallel(const struct TaskInput *TI) {
     time_converted = seconds();
 
     // gather image
-    MPI_Gather(recimage, 
-        imageSizePerProcess, 
-        MPI_UINT8_T, 
-        image, 
-        imageSizePerProcess, 
-        MPI_UINT8_T, 
-        0, MPI_COMM_WORLD);
+    if(parallel_loading) 
+    {
+        MPI_Gather(recimage, 
+            imageSizePerProcess, 
+            MPI_UINT8_T, 
+            image, 
+            imageSizePerProcess, 
+            MPI_UINT8_T, 
+            0, MPI_COMM_WORLD);
+    } else {
+        MPI_Gatherv(
+        recimage,countsSend[self],MPI_UINT8_T,image,countsSend,displacements,MPI_UINT8_T,0,MPI_COMM_WORLD
+        );
+    }
+        
     time_collected = seconds();
 
     if (self == 0) {
