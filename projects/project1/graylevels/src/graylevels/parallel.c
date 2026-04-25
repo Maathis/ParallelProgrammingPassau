@@ -37,8 +37,24 @@ static void compute_levels(int levels, uint8_t *newlevels, uint8_t *recimg) {
         histogram[i] = 0;
 
     // compute the histogram
-    for (int i = 0; i < imageSizePerProcess; ++i)
-        histogram[recimg[i]]++;
+    #pragma omp parallel
+    {
+        int histloc[HISTOGRAM_SIZE];
+
+        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            histloc[i] = 0;
+        }
+
+        #pragma omp for
+        for (int i = 0; i < imageSizePerProcess; ++i) {
+            histloc[recimg[i]]++;
+        }
+
+        #pragma omp critical
+        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            histogram[i] += histloc[i];
+        }
+    }
 
     const int BUFFER_SIZE = np*HISTOGRAM_SIZE;
     int buffer[BUFFER_SIZE];
@@ -67,6 +83,7 @@ static void compute_levels(int levels, uint8_t *newlevels, uint8_t *recimg) {
     // 'step' is the number of pixels mapped to the
     // same new gray value.
     int step = (imageSize + levels) / levels;
+    #pragma omp parallel for
     for (int i = 0; i <= maxcolor; ++i) {
         newlevels[i] = ((histsum[i] / step) * maxcolor) / (levels - 1);
     }
@@ -74,6 +91,7 @@ static void compute_levels(int levels, uint8_t *newlevels, uint8_t *recimg) {
 
 static void convert_grayvalues(uint8_t *recimage, uint8_t *newlevels) {
     // set new gray values in the image
+    #pragma omp parallel for
     for (int i = 0; i < imageSizePerProcess; ++i) {
         recimage[i] = newlevels[recimage[i]];
     }
