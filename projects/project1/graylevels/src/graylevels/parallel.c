@@ -50,8 +50,8 @@ static void compute_levels(int levels, uint8_t *newlevels, uint8_t *recimg) {
             histloc[recimg[i]]++;
         }
 
-        #pragma omp critical
         for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            #pragma omp atomic
             histogram[i] += histloc[i];
         }
     }
