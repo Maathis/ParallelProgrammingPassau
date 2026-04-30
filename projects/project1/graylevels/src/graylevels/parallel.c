@@ -88,11 +88,25 @@ static void compute_levels_master(int levels, uint8_t *newlevels) {
   
 
     // Calculate the histogram on the local image for the question d (master only)
-    #pragma omp parallel for
-    for (int i = 0; i < imageSizePerProcess; ++i) {
-        #pragma omp atomic
-        distributedHistogram[localImage[i]]++;
+    int threadsHistogram[omp_get_max_threads()][HISTOGRAM_SIZE];
+
+    #pragma omp parallel
+    {
+        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            threadsHistogram[omp_get_thread_num()][i] = 0;
+        }
+
+        #pragma omp for
+        for (int i = 0; i < imageSizePerProcess; ++i) {
+            threadsHistogram[omp_get_thread_num()][localImage[i]]++;
+        }
+
+        #pragma omp critical
+        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            distributedHistogram[i] += threadsHistogram[omp_get_thread_num()][i];
+        }
     }
+
 
     int buffer[np*HISTOGRAM_SIZE];
     MPI_Allgather(distributedHistogram, HISTOGRAM_SIZE, MPI_INT, buffer, HISTOGRAM_SIZE, MPI_INT, MPI_COMM_WORLD);
@@ -103,10 +117,23 @@ static void compute_levels_master(int levels, uint8_t *newlevels) {
         histogram[i] = 0;
     }
 
-    #pragma omp parallel for
-    for(int i = 0; i < (np*HISTOGRAM_SIZE); ++i) {
-        #pragma omp atomic
-        histogram[i%HISTOGRAM_SIZE] += buffer[i];
+    int threadsBuffer[omp_get_max_threads()][HISTOGRAM_SIZE];
+
+    #pragma omp parallel
+    {
+        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            threadsBuffer[omp_get_thread_num()][i] = 0;
+        }
+
+        #pragma omp for
+        for(int i = 0; i < (np*HISTOGRAM_SIZE); ++i) {
+            threadsBuffer[omp_get_thread_num()][i%HISTOGRAM_SIZE] += buffer[i];
+        }
+
+        #pragma omp critical
+        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+            histogram[i] += threadsBuffer[omp_get_thread_num()][i];
+        }
     }
 
     // Calculate histsum and newlevels
@@ -275,8 +302,8 @@ void compute_parallel(const struct TaskInput *TI) {
     // determine new gray levels
     uint8_t newlevels[maxcolor + 1];
 
-    compute_levels(TI->levels, newlevels);
-    // compute_levels_master(TI->levels, newlevels);
+    // compute_levels(TI->levels, newlevels);
+    compute_levels_master(TI->levels, newlevels);
 
     time_levels = seconds();
 
