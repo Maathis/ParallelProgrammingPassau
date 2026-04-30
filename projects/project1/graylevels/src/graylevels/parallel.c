@@ -261,7 +261,7 @@ void compute_parallel(const struct TaskInput *TI) {
             displacements[i] = i*imageSizePerProcess;
         }
 
-        // Fix the case limit
+        // Fix the edge case
         int remainder = imageSize%np;
         if(remainder != 0) {
             countsSent[np-1] += remainder; // The last process gets the rest of the image
@@ -276,14 +276,14 @@ void compute_parallel(const struct TaskInput *TI) {
         }
 
         imageSize = rows*columns;
-        imageSizePerProcess = imageSize/np; // case limit imageSize%np != 0
+        imageSizePerProcess = imageSize/np; // edge case imageSize%np != 0
 
         for(int i = 0; i < np; ++i) {
             countsSent[i] = imageSizePerProcess;
             displacements[i] = i*imageSizePerProcess;
         }
 
-        // Fix the case limit
+        // Fix the edge case
         int remainder = imageSize%np;
         if(remainder != 0) {
             countsSent[np-1] += remainder; // The last process gets the rest of the image
