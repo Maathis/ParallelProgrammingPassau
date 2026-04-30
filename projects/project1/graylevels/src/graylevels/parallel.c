@@ -32,85 +32,13 @@ static void compute_levels(int levels, uint8_t *newlevels) {
     // histogram[x] counts the number of pixels that have a
     // gray level value of x.
     int distributedHistogram[HISTOGRAM_SIZE];
-    printf("%d > AA\n", self);
     // initialize histogram entries to 0
     for (int i = 0; i <= maxcolor; ++i)
         distributedHistogram[i] = 0;
-
-    printf("%d > BB\n", self);
-  
-    #pragma omp parallel
-    {
-        int threadHistogram[HISTOGRAM_SIZE];
-
-        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
-            threadHistogram[i] = 0;
-        }
-
-        #pragma omp for
-        for (int i = 0; i < imageSizePerProcess; ++i) {
-            threadHistogram[localImage[i]]++;
-        }
-
-        #pragma omp critical
-        for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
-            distributedHistogram[i] += threadHistogram[i];
-        }
-    }
-
-    int buffer[np*HISTOGRAM_SIZE];
-    MPI_Allgather(distributedHistogram, HISTOGRAM_SIZE, MPI_INT, buffer, HISTOGRAM_SIZE, MPI_INT, MPI_COMM_WORLD);
-
-    // Calculate the full histogram after getting all parts
-    int histogram[HISTOGRAM_SIZE];
-    for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
-        histogram[i] = 0;
-    }
-
-    for(int i = 0; i < (np*HISTOGRAM_SIZE); ++i) {
-        histogram[i%HISTOGRAM_SIZE] += buffer[i];
-    }
-
-    printf("%d > EE\n", self);
-
-    // Calculate histsum and newlevels
-    int histsum[HISTOGRAM_SIZE];
-    histsum[0] = histogram[0];
-    
-    // That seems to be non-parallelizable because histsum[i] depends on histsum[i-1]
-    for (int i = 1; i <= maxcolor; ++i)
-        histsum[i] = histogram[i] + histsum[i - 1];
-
-    // 'step' is the number of pixels mapped to the
-    // same new gray value.
-    int step = (imageSize + levels) / levels;
-
-    #pragma omp parallel for
-    for (int i = 0; i <= maxcolor; ++i) {
-        newlevels[i] = ((histsum[i] / step) * maxcolor) / (levels - 1);
-    }
-    printf("%d > FF\n", self);
-}
-
-// Question D
-static void compute_levels_master(int levels, uint8_t *newlevels) {
-
-    const int HISTOGRAM_SIZE = maxcolor + 1;
-    // histogram[x] counts the number of pixels that have a
-    // gray level value of x.
-    int distributedHistogram[HISTOGRAM_SIZE];
-    printf("%d > AA\n", self);
-    // initialize histogram entries to 0
-    for (int i = 0; i <= maxcolor; ++i)
-        distributedHistogram[i] = 0;
-
-    printf("%d > BB\n", self);
   
 
-    // Calculate the histogram on the local image for the question d (master only)
-    #pragma omp parallel for
+    #pragma omp parallel for reduction(+:distributedHistogram[:])
     for (int i = 0; i < imageSizePerProcess; ++i) {
-        #pragma omp atomic
         distributedHistogram[localImage[i]]++;
     }
 
@@ -124,11 +52,10 @@ static void compute_levels_master(int levels, uint8_t *newlevels) {
         histogram[i] = 0;
     }
 
+    #pragma omp parallel for reduction(+:histogram[:])
     for(int i = 0; i < (np*HISTOGRAM_SIZE); ++i) {
         histogram[i%HISTOGRAM_SIZE] += buffer[i];
     }
-
-    printf("%d > EE\n", self);
 
     // Calculate histsum and newlevels
     int histsum[HISTOGRAM_SIZE];
@@ -146,7 +73,58 @@ static void compute_levels_master(int levels, uint8_t *newlevels) {
     for (int i = 0; i <= maxcolor; ++i) {
         newlevels[i] = ((histsum[i] / step) * maxcolor) / (levels - 1);
     }
-    printf("%d > FF\n", self);
+}
+
+// Question D
+static void compute_levels_master(int levels, uint8_t *newlevels) {
+
+    const int HISTOGRAM_SIZE = maxcolor + 1;
+    // histogram[x] counts the number of pixels that have a
+    // gray level value of x.
+    int distributedHistogram[HISTOGRAM_SIZE];
+    // initialize histogram entries to 0
+    for (int i = 0; i <= maxcolor; ++i)
+        distributedHistogram[i] = 0;
+  
+
+    // Calculate the histogram on the local image for the question d (master only)
+    #pragma omp parallel for
+    for (int i = 0; i < imageSizePerProcess; ++i) {
+        #pragma omp atomic
+        distributedHistogram[localImage[i]]++;
+    }
+
+    int buffer[np*HISTOGRAM_SIZE];
+    MPI_Allgather(distributedHistogram, HISTOGRAM_SIZE, MPI_INT, buffer, HISTOGRAM_SIZE, MPI_INT, MPI_COMM_WORLD);
+
+    // Calculate the full histogram after getting all parts
+    int histogram[HISTOGRAM_SIZE];
+    for (int i = 0; i < HISTOGRAM_SIZE; ++i) {
+        histogram[i] = 0;
+    }
+
+    #pragma omp parallel for
+    for(int i = 0; i < (np*HISTOGRAM_SIZE); ++i) {
+        #pragma omp atomic
+        histogram[i%HISTOGRAM_SIZE] += buffer[i];
+    }
+
+    // Calculate histsum and newlevels
+    int histsum[HISTOGRAM_SIZE];
+    histsum[0] = histogram[0];
+    
+    // That seems to be non-parallelizable because histsum[i] depends on histsum[i-1]
+    for (int i = 1; i <= maxcolor; ++i)
+        histsum[i] = histogram[i] + histsum[i - 1];
+
+    // 'step' is the number of pixels mapped to the
+    // same new gray value.
+    int step = (imageSize + levels) / levels;
+
+    #pragma omp parallel for
+    for (int i = 0; i <= maxcolor; ++i) {
+        newlevels[i] = ((histsum[i] / step) * maxcolor) / (levels - 1);
+    }
 }
 
 static void convert_grayvalues(uint8_t *newlevels) {
@@ -220,9 +198,7 @@ void compute_parallel(const struct TaskInput *TI) {
 
     } else if (self == 0) {
         // load image on processor 0
-        printf("%d > 11\n", self);
         image = ppp_pnm_read(TI->filename, &kind, &rows, &columns, &maxcolor);
-        printf("%d > image size : %d\n", self, rows*columns);
 
         if (image == NULL) {
             fprintf(stderr, "Could not load image from file '%s'.\n",
@@ -246,7 +222,6 @@ void compute_parallel(const struct TaskInput *TI) {
             MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
             return;
         }
-        printf("%d > 22\n", self);
     }
 
     time_loaded = seconds();
@@ -265,7 +240,6 @@ void compute_parallel(const struct TaskInput *TI) {
             countsSent[np-1] += remainder; // The last process gets the rest of the image
         }
     } else {
-        printf("%d > 33 ", self);
         int config[3] = {columns, rows, maxcolor};
         MPI_Bcast(&config, 3, MPI_INT, 0, MPI_COMM_WORLD);
         if(self != 0) {
@@ -291,13 +265,10 @@ void compute_parallel(const struct TaskInput *TI) {
         if(self == (np-1) && remainder != 0) { // We update the local size of the last process
             imageSizePerProcess += remainder;
         }
-        printf("%d > 44\n", self);
 
         localImage = (uint8_t*) malloc(imageSizePerProcess*sizeof(uint8_t));
         MPI_Scatterv(image, countsSent, displacements, MPI_UINT8_T, localImage, countsSent[self], MPI_UINT8_T, 0, MPI_COMM_WORLD);
     }
-
-    printf("%d > 55\n", self);
 
     time_distributed = seconds();
 
@@ -305,20 +276,18 @@ void compute_parallel(const struct TaskInput *TI) {
     uint8_t newlevels[maxcolor + 1];
 
     compute_levels(TI->levels, newlevels);
-    printf("%d > 66\n", self);
+    // compute_levels_master(TI->levels, newlevels);
 
     time_levels = seconds();
 
     // convert gray levels in image
     convert_grayvalues(newlevels);
-    printf("%d > 77\n", self);
 
     time_converted = seconds();
 
     // gather image
     MPI_Gatherv(localImage, imageSizePerProcess, MPI_UINT8_T, image, countsSent, displacements, MPI_UINT8_T, 0, MPI_COMM_WORLD);
     time_collected = seconds();
-    printf("%d > 88\n", self);
 
     if (self == 0) {
         // save output image
