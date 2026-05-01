@@ -1,7 +1,6 @@
 #include <math.h>
 #include <omp.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdlib.h>
 
 #include "ppp/ppp.h"
@@ -216,7 +215,6 @@ void compute_parallel(const struct TaskInput *TI) {
     time_start = seconds();
 
     if (parallel_loading) {
-        // load image in a distributed fashion hiere
         localImage = ppp_pnm_read_part(TI->filename, &kind, &rows, &columns, &maxcolor, partfn);
 
         if(self == 0) {
