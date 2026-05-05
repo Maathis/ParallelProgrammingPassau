@@ -138,11 +138,13 @@ static void smooth_single(double **input, double **temp, int rows, const int col
  * `input' and `temp' are swapped, i.e., when the function returns,
  * the result is in *input.
  */
-static void sobel_single(double **input, double **temp, int rows, const int columns) {
+static void sobel_parallel(double **input, double **temp, int rows, const int columns) {
 #define S(c, r)                                                                                    \
     ((r) >= 0 && (r) < rows && (c) >= 0 && (c) < columns ? (*input)[(r) * columns + (c)] : 0)
 
+    #pragma omp parallel for
     for (int y = 0; y < rows; ++y) {
+        #pragma omp parallel for
         for (int x = 0; x < columns; ++x) {
             double sx, sy;
             sx = S(x - 1, y - 1) + 2 * S(x, y - 1) + S(x + 1, y - 1) //
@@ -211,7 +213,7 @@ void compute_parallel(const struct TaskInput *TI) {
     // Perform smoother first, then edge detection (if enabled).
     smooth_single(&imageD, &tempD, rows, columns, TI);
     if (TI->doSobel)
-        sobel_single(&imageD, &tempD, rows, columns);
+        sobel_parallel(&imageD, &tempD, rows, columns);
 
     double time_computed = seconds();
 
