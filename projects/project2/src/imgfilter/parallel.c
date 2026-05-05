@@ -142,9 +142,8 @@ static void sobel_parallel(double **input, double **temp, int rows, const int co
 #define S(c, r)                                                                                    \
     ((r) >= 0 && (r) < rows && (c) >= 0 && (c) < columns ? (*input)[(r) * columns + (c)] : 0)
 
-    #pragma omp parallel for
+    #pragma omp parallel for collapse(2)
     for (int y = 0; y < rows; ++y) {
-        #pragma omp parallel for
         for (int x = 0; x < columns; ++x) {
             double sx, sy;
             sx = S(x - 1, y - 1) + 2 * S(x, y - 1) + S(x + 1, y - 1) //
