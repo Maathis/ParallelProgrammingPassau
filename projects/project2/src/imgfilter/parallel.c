@@ -74,6 +74,7 @@ static void smooth_single(double **input, double **temp, int rows, const int col
     // Perform (at most) maxIters iterations.
     for (int iter = 0; iter < TI->maxIters; ++iter) {
         double maxchange = 0; // maximal change in pixel value at an inner pixel
+        #pragma omp parallel for collapse(2) reduction(max:maxchange)
         for (int y = 0; y < rows; ++y) {
             for (int x = 0; x < columns; ++x) {
                 double new_value;
