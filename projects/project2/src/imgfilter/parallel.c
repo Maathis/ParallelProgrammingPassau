@@ -52,7 +52,7 @@ static int cmpdouble_single(const void *a_, const void *b_) {
  * Apply smoother to *input. Use *temp as a temporary storage. `image' and `temp' are swapped
  * after each iteration, i.e., when the function returns, the result is again in `image'.
  */
-static void smooth_single(double **input, double **temp, int rows, const int columns,
+static void smooth_parallel(double **input, double **temp, int rows, const int columns,
                    const struct TaskInput *TI) {
     // Use 0 as pixel value if the pixel is outside the bounds of the image.
 #define S(c, r)                                                                                    \
@@ -64,6 +64,7 @@ static void smooth_single(double **input, double **temp, int rows, const int col
 
     // Sum up the weights in the weight matrix.
     int sumWeights = 0;
+    #pragma omp parallel for reduction(+:sumWeights)
     for (int i = 0; i < nWeights; ++i)
         sumWeights += TI->weights[i];
 
@@ -211,7 +212,7 @@ void compute_parallel(const struct TaskInput *TI) {
     // variables. The result of the computation is always in `imageD'.
 
     // Perform smoother first, then edge detection (if enabled).
-    smooth_single(&imageD, &tempD, rows, columns, TI);
+    smooth_parallel(&imageD, &tempD, rows, columns, TI);
     if (TI->doSobel)
         sobel_parallel(&imageD, &tempD, rows, columns);
 
