@@ -81,15 +81,14 @@ static void smooth_parallel(int self, int np, double **input, double **temp, int
     // of sum of the values in the weight matrix (if this sum is not 0).
     double avgFactor = sumWeights != 0 ? abs(sumWeights) : 1;
 
-    // printf("sumweight : %d | wRows : %d | wCols : %d | row : %d | col : %d\n", sumWeights, wRows, wCols, rows, columns);
-
-    int calculationRowRange = ((isFirstNode || isFinalNode) ? rows-1 : rows-2);
+    int yStart = (isFirstNode ? 0 : 1);
+    int yRange = (isFinalNode ? rows : rows-1);
 
     // Perform (at most) maxIters iterations.
     for (int iter = 0; iter < TI->maxIters; ++iter) {
         double maxchange = 0; // maximal change in pixel value at an inner pixel
         #pragma omp parallel for collapse(2) reduction(max:maxchange)
-        for (int y = (isFirstNode ? 0 : 1); y < calculationRowRange; ++y) {
+        for (int y = yStart; y < yRange; ++y) {
             for (int x = 0; x < columns; ++x) {
                 double new_value;
                 if (TI->medianSmoother) {
@@ -137,43 +136,45 @@ static void smooth_parallel(int self, int np, double **input, double **temp, int
 
         // What is now in *temp is used as input in the next iteration,
         // i.e., we swap `input' and `temp'.
-        
         swap_single(input, temp);
-  
-        // If number of MPI is even
-        if(np%2 == 0) {
-            // Bottom rows
-            if(self%2 == 0 && !isFinalNode) {
-                MPI_Send(&(*temp)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD);
-            } else {
-                MPI_Recv(&(*temp)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // for(int i = 0; i < columns; ++i) {
-                //     printf("(AFTER) [self: %d | i: %d] %f \n", self, i, (*temp)[((rows-1)*columns)+i]);
-                // }
+
+        // If self is even for bottom rows
+        if(self%2 == 0) {
+            if(!isFinalNode) {
+                MPI_Send(&(*input)[(rows-2)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD);
             }
 
-            if(self % 2 == 1 && !isFinalNode) {
-                MPI_Send(&(*temp)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD);
-            } else if(!isFirstNode && !isFinalNode) {
-                MPI_Recv(&(*temp)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if(!isFirstNode) {
+                MPI_Recv(&(*input)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
 
-            // Top rows
-            if(self%2 == 0 && !isFirstNode) {
-                MPI_Send(&(*temp)[columns], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD);
-            } else if(!isFirstNode && !isFinalNode) {
-                MPI_Recv(&(*temp)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            }
-
-            if(self % 2 == 1) {
-                MPI_Send(&(*temp)[columns], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD);
-            } else {
-                MPI_Recv(&(*temp)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            }
         } else {
-            
+            MPI_Recv(&(*input)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        
+            if(!isFinalNode) {
+                MPI_Send(&(*input)[(rows-2)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD);
+            }
         }
 
+        // If self is odd for top rows
+        if(self%2 == 0) {
+            if(!isFirstNode) {
+                MPI_Send(&(*input)[columns], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD);
+            }
+
+            if(!isFinalNode) {
+                MPI_Recv(&(*input)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+
+        } else {
+            if(!isFinalNode) {
+                MPI_Recv(&(*input)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+
+            if(!isFirstNode) {
+                MPI_Send(&(*input)[columns], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD);
+            }
+        }
 
         double distrMaxChange;
         MPI_Allreduce(&maxchange, &distrMaxChange, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
@@ -184,7 +185,7 @@ static void smooth_parallel(int self, int np, double **input, double **temp, int
             printf("Iteration %d: maxchange=%g\n", iter, maxchange);
 
         // When `maxchange' drops below a threshold, no further iterations are performed.
-        if (distrMaxChange < TI->minChange)
+        if (maxchange < TI->minChange)
             break;
     }
 #undef S
@@ -271,29 +272,28 @@ void compute_parallel(const struct TaskInput *TI) {
 
     int counts[np], displacements[np], distRows[np];
 
-    printf("0 | ROWS = %d | COLUMNS = %d | distrRows = %d\n", rows, columns, distrRowsBase);
+    printf("ROWS = %d | COLUMNS = %d | distrRows = %d\n", rows, columns, distrRowsBase);
 
     distRows[0] = distrRowsBase+1;
     counts[0] = distRows[0]*columns;
     displacements[0] = 0;
-    // printf("0 | count = %d | disp = %d\n", counts[0], displacements[0]);
+    printf("0 | count = %d | disp = %d\n", counts[0], displacements[0]);
     for (int i = 1; i < (np-1); ++i) {
         distRows[i] = distrRowsBase+2;
         counts[i] = distRows[i]*columns;
         displacements[i] = i*(distrRowsBase*columns)-columns;
-        // printf("%d | count = %d | disp = %d\n", i, counts[i], displacements[i]);
+        printf("%d | count = %d | disp = %d\n", i, counts[i], displacements[i]);
     }
     distRows[np-1] = distrRowsBase+1+(rows%np);
     counts[np-1] = distRows[np-1]*columns; // +(rows%np) : if rows%np != 0
     displacements[np-1] = (np-1)*(distrRowsBase*columns)-columns;
-    // printf("%d | count = %d | disp = %d\n", (np-1), counts[(np-1)], displacements[(np-1)]);
+    printf("%d | count = %d | disp = %d\n", (np-1), counts[(np-1)], displacements[(np-1)]);
 
     double *distrImageD = (double *)malloc(sizeof(double) * counts[self]);
 
     MPI_Scatterv(imageD, counts, displacements, MPI_DOUBLE, distrImageD, counts[self], MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    // printArray(self, distrImageD, counts[self]);
 
-    // // Perform smoother first, then edge detection (if enabled).
+    // Perform smoother first, then edge detection (if enabled).
     smooth_parallel(self,np,&distrImageD, &tempD, distRows[self], columns, TI);
     if (TI->doSobel)
         sobel_parallel(&distrImageD, &tempD, distRows[self], columns);
