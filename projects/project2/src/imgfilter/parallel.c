@@ -196,12 +196,18 @@ static void smooth_parallel(int self, int np, double **input, double **temp, int
  * `input' and `temp' are swapped, i.e., when the function returns,
  * the result is in *input.
  */
-static void sobel_parallel(double **input, double **temp, int rows, const int columns) {
+static void sobel_parallel(int self, int np, double **input, double **temp, int rows, const int columns) {
 #define S(c, r)                                                                                    \
     ((r) >= 0 && (r) < rows && (c) >= 0 && (c) < columns ? (*input)[(r) * columns + (c)] : 0)
 
+    const bool isFirstNode = (self == 0);
+    const bool isFinalNode = (self == (np-1));
+
+    int yStart = (isFirstNode ? 0 : 1);
+    int yRange = (isFinalNode ? rows : rows-1);
+
     #pragma omp parallel for collapse(2)
-    for (int y = 0; y < rows; ++y) {
+    for (int y = yStart; y < yRange; ++y) {
         for (int x = 0; x < columns; ++x) {
             double sx, sy;
             sx = S(x - 1, y - 1) + 2 * S(x, y - 1) + S(x + 1, y - 1) //
@@ -213,6 +219,44 @@ static void sobel_parallel(double **input, double **temp, int rows, const int co
     }
 
     swap_single(input, temp);
+
+    // If self is even for bottom rows
+    if(self%2 == 0) {
+        if(!isFinalNode) {
+            MPI_Send(&(*input)[(rows-2)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD);
+        }
+
+        if(!isFirstNode) {
+            MPI_Recv(&(*input)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+    } else {
+        MPI_Recv(&(*input)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    
+        if(!isFinalNode) {
+            MPI_Send(&(*input)[(rows-2)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD);
+        }
+    }
+
+    // If self is odd for top rows
+    if(self%2 == 0) {
+        if(!isFirstNode) {
+            MPI_Send(&(*input)[columns], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD);
+        }
+
+        if(!isFinalNode) {
+            MPI_Recv(&(*input)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+    } else {
+        if(!isFinalNode) {
+            MPI_Recv(&(*input)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+        if(!isFirstNode) {
+            MPI_Send(&(*input)[columns], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD);
+        }
+    }
 #undef S
 }
 
@@ -296,7 +340,7 @@ void compute_parallel(const struct TaskInput *TI) {
     // Perform smoother first, then edge detection (if enabled).
     smooth_parallel(self,np,&distrImageD, &tempD, distRows[self], columns, TI);
     if (TI->doSobel)
-        sobel_parallel(&distrImageD, &tempD, distRows[self], columns);
+        sobel_parallel(self, np, &distrImageD, &tempD, distRows[self], columns);
 
     double time_computed = seconds();
 
