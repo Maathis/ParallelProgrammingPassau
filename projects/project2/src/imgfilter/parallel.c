@@ -325,6 +325,149 @@ static void smooth_parallel_D(int self, int np, double **input, double **temp, i
 }
 
 /*
+ * For the question E
+ * Apply smoother to *input. Use *temp as a temporary storage. `image' and `temp' are swapped
+ * after each iteration, i.e., when the function returns, the result is again in `image'.
+ */
+static void smooth_parallel_E(int self, int np, double **input, double **temp, int rows, const int columns,
+                   const struct TaskInput *TI) {
+    // Use 0 as pixel value if the pixel is outside the bounds of the image.
+#define S(c, r)                                                                                    \
+    ((r) >= 0 && (r) < rows && (c) >= 0 && (c) < columns ? (*input)[(r) * columns + (c)] : 0)
+
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
+    const int wRows = TI->weightsRows;
+    const int wCols = TI->weightsColumns;
+    const int nWeights = wRows * wCols;
+
+    const bool isFirstNode = (self == 0);
+    const bool isFinalNode = (self == (np-1));
+
+    const int TILE_SIZE = 32;
+
+    // Sum up the weights in the weight matrix.
+    int sumWeights = 0;
+    #pragma omp parallel for reduction(+:sumWeights)
+    for (int i = 0; i < nWeights; ++i)
+        sumWeights += TI->weights[i];
+
+    // The averaging smoother divides by the absolute value
+    // of sum of the values in the weight matrix (if this sum is not 0).
+    double avgFactor = sumWeights != 0 ? abs(sumWeights) : 1;
+
+    int yStart = (isFirstNode ? 0 : 1);
+    int yRange = (isFinalNode ? rows : rows-1);
+
+    // Perform (at most) maxIters iterations.
+    MPI_Request commSendTop = MPI_REQUEST_NULL;
+    MPI_Request commRecTop = MPI_REQUEST_NULL;
+
+    MPI_Request commSendBot = MPI_REQUEST_NULL;
+    MPI_Request commRecBot = MPI_REQUEST_NULL;
+
+    for (int iter = 0; iter < TI->maxIters; ++iter) {
+
+        double maxchange = 0; // maximal change in pixel value at an inner pixel
+        
+        if(!isFirstNode) {
+            MPI_Wait(&commRecTop, MPI_STATUS_IGNORE);
+            MPI_Irecv(&(*temp)[0], columns, MPI_DOUBLE, self-1, 0, MPI_COMM_WORLD, &commRecBot);
+        }
+
+        if(!isFinalNode) {
+            MPI_Irecv(&(*temp)[(rows-1)*columns], columns, MPI_DOUBLE, self+1, 1, MPI_COMM_WORLD, &commRecTop);
+        }
+
+        #pragma omp parallel for collapse(2) reduction(max:maxchange)
+        for (int y = yStart; y < yRange; y+=TILE_SIZE) {
+
+            if(y == (yRange-1) && !isFinalNode) {
+                MPI_Wait(&commRecTop, MPI_STATUS_IGNORE);
+            }
+
+            // Adapted from https://open-catalog.codee.com/Glossary/Loop-tiling
+            for (int x = 0; x < columns; x+=TILE_SIZE) {
+                for(int yy = y; yy < MIN(y+TILE_SIZE, yRange); ++yy) {
+                    for(int xx = x; xx < MIN(x+TILE_SIZE, columns); ++xx) {
+
+                        double new_value;
+
+                        if (TI->medianSmoother) {
+                            // Each neighbor value of (x,y) is put as many
+                            // times in `data' as the corresponding weight in
+                            // the weight matrix says.
+                            double data[sumWeights];
+                            int idx = 0;
+                            int w = 0;
+                            for (int v = -wRows / 2; v <= wRows / 2; ++v) {
+                                for (int u = -wCols / 2; u <= wCols / 2; ++u) {
+                                    // printf("v : %d | u : %d | idx : %d\n", v, u, idx);
+                                    for (int i = 0; i < TI->weights[idx]; ++i)
+                                        data[w++] = S(xx + u, yy + v);
+                                    idx++;
+                                }
+                            }
+                            // The new pixel value is the median (the value in the middle
+                            // after sorting the values).
+                            qsort(data, sumWeights, sizeof(double), cmpdouble_single);
+                            new_value = data[sumWeights / 2];
+                        } else {
+                            // The averaging filter computes the weighted average
+                            // of the neighboring pixels.
+                            int idx = 0;
+                            double sum = 0;
+                            for (int v = -wRows / 2; v <= wRows / 2; ++v) {
+                                for (int u = -wCols / 2; u <= wCols / 2; ++u) {
+                                    sum += TI->weights[idx] * S(xx + u, yy + v);
+                                    ++idx;
+                                }
+                            }
+                            new_value = sum / avgFactor;
+                        }
+
+                        // Store new value.
+                        (*temp)[yy * columns + xx] = new_value;
+
+                        // Update maxchange (only at pixel not at the border).
+                        double change = fabs(new_value - S(xx, yy));
+                        if (change > maxchange && xx > 0 && yy > 0 && xx < columns - 1 && yy < rows - 1)
+                            maxchange = change;
+                    }
+                }
+            }
+
+        }
+
+        // What is now in *temp is used as input in the next iteration,
+        // i.e., we swap `input' and `temp'.
+        swap_single(input, temp);
+
+        if(!isFirstNode) {
+            MPI_Isend(&(*input)[columns], columns, MPI_DOUBLE, self-1, 1, MPI_COMM_WORLD, &commSendTop);
+        }
+
+        if(!isFinalNode) {
+            MPI_Isend(&(*input)[(rows-2)*columns], columns, MPI_DOUBLE, self+1, 0, MPI_COMM_WORLD, &commSendBot);
+        }
+
+        double distrMaxChange;
+        MPI_Allreduce(&maxchange, &distrMaxChange, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        
+        maxchange = distrMaxChange;
+
+        if (TI->debugOutput)
+            printf("Iteration %d: maxchange=%g\n", iter, maxchange);
+
+        // When `maxchange' drops below a threshold, no further iterations are performed.
+        if (maxchange < TI->minChange)
+            break;
+    }
+#undef S
+#undef MIN
+}
+
+/*
  * Apply the Sobel operator to *input using *temp as output.
  * `input' and `temp' are swapped, i.e., when the function returns,
  * the result is in *input.
@@ -472,7 +615,12 @@ void compute_parallel(const struct TaskInput *TI) {
 
     // Perform smoother first, then edge detection (if enabled).
     // smooth_parallel_C(self,np,&distrImageD, &tempD, distRows[self], columns, TI);
-    smooth_parallel_D(self,np,&distrImageD, &tempD, distRows[self], columns, TI);
+    
+    if(TI->minChange == 0) {
+        smooth_parallel_E(self,np,&distrImageD, &tempD, distRows[self], columns, TI);
+    } else {
+        smooth_parallel_D(self,np,&distrImageD, &tempD, distRows[self], columns, TI);
+    }
     if (TI->doSobel)
         sobel_parallel(self, np, &distrImageD, &tempD, distRows[self], columns);
 
